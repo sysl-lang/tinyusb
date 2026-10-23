@@ -1,0 +1,6 @@
+module sh.sysl.tinyusb
+
+import sh.sysl.tinyusb.c
+
+// Whether the device stack has been started.
+started() -> bool = c.inited()

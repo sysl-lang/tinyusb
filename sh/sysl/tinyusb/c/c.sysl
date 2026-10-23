@@ -1,0 +1,11 @@
+// TinyUSB as C declares it.
+//
+// **Everything that is C lives here**: the declarations below, read out of TinyUSB's headers, and
+// `tinyusb_sysl.c` beside them for what is a macro or a static inline function upstream. Nothing here
+// is meant to be called by a program; the modules above turn it into the pleasant API.
+
+module sh.sysl.tinyusb.c
+
+@include("tusb.h")
+
+extern "tud_inited" inited() -> bool

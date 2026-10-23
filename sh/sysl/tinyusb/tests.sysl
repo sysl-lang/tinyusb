@@ -1,0 +1,6 @@
+module sh.sysl.tinyusb
+@tests
+
+@test("the stack is not started before it is asked to be")
+not_started()
+    assert(!started())
