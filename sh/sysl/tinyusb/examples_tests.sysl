@@ -1,0 +1,61 @@
+module sh.sysl.tinyusb
+@tests
+
+import sysl.buf.{Buf, buf}
+import sysl.env.get_or
+import sysl.fs.make_dir_all
+import sysl.process.capture
+import sysl.testing.{compiler, skip}
+import sysl.text.{Search, split}
+
+// The two example applications are built for the boards they are written for. A board's image is
+// linked by that board's own build (the pico-sdk's CMake, ST's startup code), so what is checked is
+// the archive each example makes: it compiles, and the symbols it leaves for the board to supply are
+// exactly the ones the board's SDK defines.
+
+private build_c(example: string, target: string, extra: []const string) -> string
+    make_dir_all(".sysl/examples").unwrap()
+    val archive = f".sysl/examples/$example.a"
+    var args: Buf[string] = buf()
+    for a in ["build-c", f"examples/$example", "--target", target, "-o", archive] do args.push(a)
+    for a in extra do args.push(a)
+    val built = capture(compiler(), args.view(), stderr = true).unwrap()
+    if !built.status.ok() then panic(f"build-c of $example for $target failed:\n${built.err.unwrap_or("")}")
+    archive
+
+// The symbols an archive uses and does not define, one per line with a newline at each end.
+private left_undefined(archive: string) -> string
+    val used = capture("nm", ["-u", archive]).unwrap().text
+    val defined = capture("nm", ["-g", "--defined-only", archive]).unwrap().text
+    var out = "\n"
+    for line in split(used, "\n")
+        val name = last_word(line)
+        // An archive's listing names each member on a line of its own, ending in a colon.
+        if name.len > 0 && line.index_of(":").is_none() && !defined.contains(f" $name\n") then out += f"$name\n"
+    out
+
+// The text after the last space of `line`.
+private last_word(line: string) -> string
+    var start = line.len
+    while start > 0 && line.bytes[start - 1] != u8(' ') do start -= 1
+    line[start..<line.len]
+
+@test("example: the Pico 2 serial example builds, and leaves the SDK's functions for the board to supply")
+example_pico2()
+    if get_or("PICO_SDK_PATH", "") == "" then skip("PICO_SDK_PATH does not name a pico-sdk")
+    val left = left_undefined(build_c("pico2-cdc", "thumb-freestanding", [][..]))
+    // What TinyUSB's RP2 port calls in the SDK and the example calls for the time: nothing else.
+    for need in ["irq_add_shared_handler", "irq_remove_handler", "irq_set_enabled", "critical_section_init", "panic", "time_us_64"]
+        assert(left.contains(f"\n$need\n"), f"$need is not left for the SDK, so the port no longer calls it")
+    assert(!left.contains("\ntud_"), "the example leaves a TinyUSB function undefined")
+    assert(!left.contains("\ntusb_"), "the example leaves a TinyUSB function undefined")
+
+@test("example: the STM32H7 bridge example builds with the device on one port and the host on the other")
+example_h7()
+    val cube = get_or("STM32CUBE_H7_PATH", "")
+    if cube == "" then skip("STM32CUBE_H7_PATH does not name an STM32CubeH7 checkout")
+    val left = left_undefined(build_c("h7-bridge", "thumbv7em-freestanding", [f"--include-path", f"stm32cube_h7=$cube"][..]))
+    // The CMSIS system file defines the core clock; everything else the example uses is in the archive.
+    assert(left.contains("\nSystemCoreClock\n"))
+    assert(!left.contains("\ntud_"), "the example leaves a TinyUSB device function undefined")
+    assert(!left.contains("\ntuh_"), "the example leaves a TinyUSB host function undefined")

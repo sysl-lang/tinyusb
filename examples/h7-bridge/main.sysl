@@ -1,0 +1,34 @@
+import sh.sysl.tinyusb
+import sh.sysl.tinyusb.serial
+
+// The device is on the high-speed controller (root port 1) and the host on the full-speed one
+// (root port 0).
+val DEVICE_PORT: u8 = 1
+val HOST_PORT: u8 = 0
+
+// The board's millisecond tick, kept by its SysTick handler.
+@export("sysl_h7_ticks")
+var ticks: u32 = 0
+
+struct Ticks
+    unused: u8
+
+impl tinyusb.Clock for Ticks
+    now_ms(*self) -> u32 = ticks
+
+var board_ticks = Ticks(0)
+
+// Start both roles and carry whatever the computer sends to the device's serial port back to it.
+@export("main")
+run() -> int
+    tinyusb.set_clock(&board_ticks)
+    if !tinyusb.start_device(DEVICE_PORT) then return 1
+    if !tinyusb.start_host(HOST_PORT) then return 2
+    val port = serial.Serial(0)
+    var chunk: [64]u8 = [0; 64]
+    loop
+        tinyusb.task()
+        if port.connected() && port.available() > 0
+            val n = port.read(chunk[..])
+            port.write(chunk[0..<n])
+            port.flush()

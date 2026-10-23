@@ -1,0 +1,22 @@
+// A Pico 2 that shows up as a serial port and echoes what it is sent: the consumer side of the
+// package's manifest. The vendor id is the Raspberry Pi one, and the receive buffer is bigger than
+// the default so a burst of packets fits between two passes of the loop.
+//
+//     PICO_SDK_PATH=<pico-sdk> sysl build-c examples/pico2-cdc --target thumb-freestanding -o pico2-cdc.a
+//
+// An archive is what a board links: the pico-sdk's CMake build does that, with `main` below as the
+// program's entry.
+
+package {
+  name    = "pico2-cdc"
+  version = "0.1.0"
+  sysl    = "0.5.0"
+}
+
+dependencies {
+  tinyusb {
+    path     = "../.."
+    features = [rp2350, cdc]
+    options  = { vid = 0x2E8A, pid = 0x000A, product = "Pico 2 serial", cdc.rx_buffer = 512 }
+  }
+}

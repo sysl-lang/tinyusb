@@ -1,0 +1,25 @@
+// An STM32H743 with a USB device on one port and a USB host on the other: a serial port towards a
+// computer on the high-speed port, and a hub with mass-storage and HID devices behind the full-speed
+// one. The consumer side of the package's manifest: the chip, the speed, the classes of each role,
+// and the macro ST's CMSIS header selects its register map by.
+//
+//     sysl build-c examples/h7-bridge --target thumbv7em-freestanding \
+//         --include-path stm32cube_h7=<STM32CubeH7 checkout> -o h7-bridge.a
+//
+// The Cube tree is only read, for the CMSIS device and core headers; the clock tree, the pins'
+// alternate functions and VBUS sensing are the board's, and not this package's.
+
+package {
+  name    = "h7-bridge"
+  version = "0.1.0"
+  sysl    = "0.5.0"
+}
+
+dependencies {
+  tinyusb {
+    path      = "../.."
+    features  = [stm32h7, high_speed, cdc, host_hub, host_msc, host_hid]
+    options   = { host.devices = 6, cdc.rx_buffer = 1024 }
+    c_defines = { STM32H743xx = true }
+  }
+}

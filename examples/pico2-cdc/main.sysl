@@ -1,0 +1,27 @@
+import sh.sysl.tinyusb
+import sh.sysl.tinyusb.serial
+
+// The RP2350's microsecond timer, 64 bits wide (pico-sdk `time_us_64`).
+extern "time_us_64" time_us() -> u64
+
+struct BoardClock
+    unused: u8
+
+impl tinyusb.Clock for BoardClock
+    now_ms(*self) -> u32 = u32((time_us() / 1000) & 0xFFFFFFFF)
+
+var board_clock = BoardClock(0)
+
+// Start the device and echo every byte the host sends back to it.
+@export("main")
+run() -> int
+    tinyusb.set_clock(&board_clock)
+    if !tinyusb.start_device(0) then return 1
+    val port = serial.Serial(0)
+    var chunk: [64]u8 = [0; 64]
+    loop
+        tinyusb.task()
+        if port.connected() && port.available() > 0
+            val n = port.read(chunk[..])
+            port.write(chunk[0..<n])
+            port.flush()
