@@ -29,12 +29,11 @@ dependencies {
 
 // The suite plays a host against the `sim` port with a serial port and a disk. Every other choice is
 // run by the `variant:` tests, which ask the compiler for the suite again with --features and
-// --option; they build into this directory's `.sysl/out`, so they run one at a time, as do the
-// `example:` tests that build the two applications in examples/ (those need PICO_SDK_PATH and
-// STM32CUBE_H7_PATH, and skip without them).
+// --option; each configuration has its own include root for the generated headers, so they run
+// beside the rest. The `example:` tests build the two applications in examples/ (those need
+// PICO_SDK_PATH and STM32CUBE_H7_PATH, and skip without them).
 test {
   features = [sim, cdc, msc]
-  alone    = ["variant:", "example:"]
 }
 
 choices {
