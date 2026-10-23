@@ -8,6 +8,12 @@
 
 #include "sysl/tinyusb.h"
 
+#ifdef SYSL_TUSB_RP2
+// TinyUSB places its hot functions with the SDK's `__not_in_flash`, which every file of the stack
+// then needs to see.
+#include "pico.h"
+#endif
+
 #if defined(SYSL_TUSB_RP2) && CFG_TUD_ENABLED && CFG_TUH_ENABLED
 #error "tinyusb: the RP2040 and RP2350 have one USB controller, which is a device or a host, not both"
 #endif
