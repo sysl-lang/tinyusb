@@ -59,3 +59,28 @@ example_h7()
     assert(left.contains("\nSystemCoreClock\n"))
     assert(!left.contains("\ntud_"), "the example leaves a TinyUSB device function undefined")
     assert(!left.contains("\ntuh_"), "the example leaves a TinyUSB host function undefined")
+
+// `build-lib` of the package itself for one board and one set of features: whether it was accepted,
+// and what the compiler said.
+private check(target: string, features: string) -> (bool, string)
+    // `device` is on by default; the features named are the whole list.
+    val args: [7]string = ["build-lib", ".", "--target", target, "--no-default-features", "--features", features]
+    val done = capture(compiler(), args[..], stderr = true).unwrap()
+    (done.status.ok(), f"${done.text}${done.err.unwrap_or("")}")
+
+@test("example: the RP2040 port, as a device with two classes and as a host, compiles")
+example_rp2040_port()
+    if get_or("PICO_SDK_PATH", "") == "" then skip("PICO_SDK_PATH does not name a pico-sdk")
+    val device = check("thumb-freestanding", "rp2040,device,cdc,msc")
+    assert(device.0, device.1)
+    val host = check("thumb-freestanding", "rp2040,host,host_hid")
+    assert(host.0, host.1)
+
+@test("example: the RP2350 port compiles as a device or as a host, and refuses to be both")
+example_rp2350_roles()
+    if get_or("PICO_SDK_PATH", "") == "" then skip("PICO_SDK_PATH does not name a pico-sdk")
+    assert(check("thumb-freestanding", "rp2350,device,cdc").0)
+    assert(check("thumb-freestanding", "rp2350,host,host_hid").0)
+    val both = check("thumb-freestanding", "rp2350,device,host")
+    assert(!both.0, "device and host were accepted on a chip with one controller")
+    assert(both.1.contains("have one USB controller, which is a device or a host, not both"), both.1)
