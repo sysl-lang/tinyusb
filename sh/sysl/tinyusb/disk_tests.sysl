@@ -1,0 +1,152 @@
+module sh.sysl.tinyusb
+@tests
+
+import sh.sysl.tinyusb.msc
+import sh.sysl.tinyusb.sim
+
+#if feature_msc
+
+// Eight blocks of 512 bytes in memory. Block `b` starts out holding `pattern(b, i)` at byte `i`.
+struct RamDisk
+    blocks: [4096]u8
+    reads: int
+    writes: int
+
+// What byte `i` of block `b` holds when the disk is new.
+private pattern(b: usize, i: usize) -> u8 = u8((b * 31 + i) & 0xFF)
+
+// The bytes a test writes: the pattern turned upside down.
+private written(i: usize) -> u8 = u8(255 - i % 256)
+
+private fill(d: *RamDisk)
+    for b in 0..<8usize
+        for i in 0..<512usize
+            d.blocks[b * 512 + i] = pattern(b, i)
+    d.reads = 0
+    d.writes = 0
+
+impl msc.Disk for RamDisk
+    block_count(*self) -> u32 = 8
+    block_size(*self) -> u16 = 512
+
+    read(*self, lba: u32, offset: u32, out: []u8) -> int
+        self.reads += 1
+        val start = usize(lba) * 512 + usize(offset)
+        if start + out.len > self.blocks.len then return -1
+        for i in 0..<out.len do out[i] = self.blocks[start + i]
+        int(out.len)
+
+    write(*self, lba: u32, offset: u32, data: []const u8) -> int
+        self.writes += 1
+        val start = usize(lba) * 512 + usize(offset)
+        if start + data.len > self.blocks.len then return -1
+        for i in 0..<data.len do self.blocks[start + i] = data[i]
+        int(data.len)
+
+private var ram: RamDisk = RamDisk([0; 4096], 0, 0)
+
+// The disk's endpoints come after the serial ports'.
+private const DISK_OUT: u8 = u8(2 * PORTS + 1)
+private const DISK_IN: u8 = u8(2 * PORTS + 0x81)
+
+// Send a command block wrapper carrying `cb` to the disk, as a host does. `to_host` says which way
+// the data stage goes; `length` is how many bytes it moves.
+private send_command(cb: []const u8, tag: u32, length: u32, to_host: bool)
+    var cbw: [31]u8 = [0; 31]
+    // The signature "USBC", the tag and the data length are little-endian words.
+    cbw[0] = 0x55
+    cbw[1] = 0x53
+    cbw[2] = 0x42
+    cbw[3] = 0x43
+    for i in 0..<4usize
+        cbw[4 + i] = u8((tag >> u32(8 * i)) & 0xFF)
+        cbw[8 + i] = u8((length >> u32(8 * i)) & 0xFF)
+    cbw[12] = if to_host then 0x80 else 0x00
+    cbw[13] = 0
+    cbw[14] = u8(cb.len)
+    for i in 0..<cb.len do cbw[15 + i] = cb[i]
+    assert_eq(sim.give(DISK_OUT, cbw[..]).expect("the disk queued no transfer for a command"), 31usize)
+    task()
+
+// Read the command status wrapper the disk sends last, check it answers `tag`, and return its status
+// byte: 0 for success, 1 for a failed command.
+private finish(tag: u32) -> u8
+    var csw: [16]u8 = [0; 16]
+    assert_eq(sim.take(DISK_IN, csw[..]).expect("the disk sent no status"), 13usize)
+    task()
+    // The signature "USBS".
+    assert_eq(csw[0], 0x55u8)
+    assert_eq(csw[1], 0x53u8)
+    assert_eq(csw[2], 0x42u8)
+    assert_eq(csw[3], 0x53u8)
+    for i in 0..<4usize do assert_eq(csw[4 + i], u8((tag >> u32(8 * i)) & 0xFF))
+    csw[12]
+
+private enumerate_with_disk()
+    fill(&ram)
+    msc.attach(&ram)
+    enumerate()
+
+@test("READ CAPACITY answers the last block and the block size, big-endian")
+disk_capacity()
+    enumerate_with_disk()
+    send_command([0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0][..], 0x11, 8, true)
+    var data: [16]u8 = [0; 16]
+    assert_eq(sim.take(DISK_IN, data[..]).expect("the disk sent no data"), 8usize)
+    task()
+    val want: [8]u8 = [0, 0, 0, 7, 0, 0, 2, 0]
+    for i in 0..<8 do assert_eq(data[i], want[i])
+    assert_eq(finish(0x11), 0u8)
+
+@test("READ(10) returns the block the disk holds")
+disk_read()
+    enumerate_with_disk()
+    send_command([0x28, 0, 0, 0, 0, 3, 0, 0, 1, 0][..], 0x22, 512, true)
+    var data: [512]u8 = [0; 512]
+    assert_eq(sim.take(DISK_IN, data[..]).expect("the disk sent no data"), 512usize)
+    task()
+    for i in 0..<512usize do assert_eq(data[i], pattern(3, i))
+    assert_eq(finish(0x22), 0u8)
+    assert_eq(ram.reads, 1)
+
+@test("WRITE(10) stores the block the host sends")
+disk_write()
+    enumerate_with_disk()
+    send_command([0x2A, 0, 0, 0, 0, 5, 0, 0, 1, 0][..], 0x33, 512, false)
+    var block: [512]u8 = [0; 512]
+    for i in 0..<512usize do block[i] = written(i)
+    assert_eq(sim.give(DISK_OUT, block[..]).expect("the disk queued no transfer for the data"), 512usize)
+    task()
+    assert_eq(finish(0x33), 0u8)
+    assert_eq(ram.writes, 1)
+    for i in 0..<512usize do assert_eq(ram.blocks[5 * 512 + i], written(i))
+    // The block before it is untouched.
+    for i in 0..<512usize do assert_eq(ram.blocks[4 * 512 + i], pattern(4, i))
+
+@test("INQUIRY names the vendor and the product, padded with spaces")
+disk_inquiry()
+    enumerate_with_disk()
+    send_command([0x12, 0, 0, 0, 36, 0][..], 0x44, 36, true)
+    var data: [64]u8 = [0; 64]
+    assert_eq(sim.take(DISK_IN, data[..]).expect("the disk sent no data"), 36usize)
+    task()
+    // Vendor id at 8..16, product id at 16..32 and revision at 32..36 (SPC-4 § 6.4.2).
+    for i in 0..<8usize do assert_eq(data[8 + i], if i < 4 then "sysl".bytes[i] else u8(' '))
+    for i in 0..<16usize do assert_eq(data[16 + i], if i < 14 then "TinyUSB device".bytes[i] else u8(' '))
+    for i in 0..<4usize do assert_eq(data[32 + i], "1.0 ".bytes[i])
+    assert_eq(finish(0x44), 0u8)
+
+@test("a command the disk does not know fails with an illegal-request sense")
+disk_unknown_command()
+    enumerate_with_disk()
+    send_command([0xEE, 0, 0, 0, 0, 0][..], 0x55, 0, true)
+    assert_eq(finish(0x55), 1u8)
+
+@test("a disk that is detached is not ready")
+disk_detached()
+    enumerate_with_disk()
+    msc.detach()
+    send_command([0x00, 0, 0, 0, 0, 0][..], 0x66, 0, true)
+    // TEST UNIT READY on a medium that is not there fails.
+    assert_eq(finish(0x66), 1u8)
+#endif

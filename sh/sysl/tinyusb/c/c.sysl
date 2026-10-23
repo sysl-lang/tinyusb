@@ -33,8 +33,11 @@ extern "sysl_tud_remote_wakeup" device_remote_wakeup() -> bool
 
 // ---- CDC ----
 
+#if feature_device
+extern "sysl_tusb_reference_configuration" reference_configuration(out: *u8, bulk_size: u16) -> u16
+#endif
+
 #if feature_cdc
-extern "sysl_tusb_reference_configuration" reference_configuration(out: *u8, ports: u8, msc: bool, bulk_size: u16) -> u16
 extern "tud_cdc_n_connected" cdc_connected(itf: u8) -> bool
 extern "tud_cdc_n_get_line_state" cdc_line_state(itf: u8) -> u8
 extern "tud_cdc_n_available" cdc_available(itf: u8) -> u32

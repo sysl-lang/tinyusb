@@ -50,14 +50,16 @@ uint8_t sysl_tusb_speed_auto(void) { return TUSB_SPEED_AUTO; }
 
 /* ---- the device's state, which upstream answers with static inline functions ---- */
 
-#if CFG_TUD_ENABLED && CFG_TUD_CDC
+#if CFG_TUD_ENABLED
 #include <string.h>
 
 /* The configuration descriptor TinyUSB's own descriptor templates (`TUD_CONFIG_DESCRIPTOR`,
- * `TUD_CDC_DESCRIPTOR`, `TUD_MSC_DESCRIPTOR`) spell for `ports` serial ports followed by a
- * mass-storage interface when `msc` is true, written to `out`; its length. The Sysl side builds the
- * same descriptor while compiling, and its tests hold the two to each other. */
-uint16_t sysl_tusb_reference_configuration(uint8_t* out, uint8_t ports, bool msc, uint16_t bulk_size) {
+ * `TUD_CDC_DESCRIPTOR`, `TUD_MSC_DESCRIPTOR`) spell for the serial ports and the disk this build
+ * has, written to `out`; its length. The sysl side builds the same descriptor while compiling, and
+ * its tests hold the two to each other. */
+uint16_t sysl_tusb_reference_configuration(uint8_t* out, uint16_t bulk_size) {
+  const uint8_t ports = CFG_TUD_CDC;
+  const bool msc = CFG_TUD_MSC;
   uint16_t total = TUD_CONFIG_DESC_LEN + (uint16_t) (ports * TUD_CDC_DESC_LEN) + (msc ? TUD_MSC_DESC_LEN : 0);
   uint8_t itfs = (uint8_t) (2 * ports + (msc ? 1 : 0));
   uint8_t const head[] = { TUD_CONFIG_DESCRIPTOR(1, itfs, 0, total, 0, 100) };

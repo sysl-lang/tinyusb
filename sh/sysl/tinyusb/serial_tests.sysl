@@ -1,0 +1,102 @@
+module sh.sysl.tinyusb
+@tests
+
+import sh.sysl.tinyusb.serial
+import sh.sysl.tinyusb.sim
+
+#if feature_cdc
+
+// Raise DTR on serial port 0, which is how a terminal says it has opened the port.
+private open_terminal()
+    control([0x21, 0x22, 1, 0, 0, 0, 0, 0][..])
+
+@test("the port is not connected until the terminal raises DTR")
+serial_connects_on_dtr()
+    enumerate()
+    val port = serial.Serial(0)
+    assert(!port.connected())
+    open_terminal()
+    assert(port.connected())
+    assert_eq(port.line_state(), 1u8)
+
+@test("bytes the host sends arrive in the port, in order")
+serial_receives()
+    enumerate()
+    open_terminal()
+    val port = serial.Serial(0)
+    assert_eq(sim.give(0x02, "hello, usb"[..].bytes).expect("no OUT transfer was queued"), 10usize)
+    task()
+    assert_eq(port.available(), 10usize)
+    var got: [32]u8 = [0; 32]
+    assert_eq(port.read(got[..]), 10usize)
+    for i in 0..<10 do assert_eq(got[i], "hello, usb".bytes[i])
+    assert_eq(port.available(), 0usize)
+
+@test("bytes the program writes go to the host once the stack runs")
+serial_transmits()
+    enumerate()
+    open_terminal()
+    val port = serial.Serial(0)
+    assert_eq(port.write_text("ping"), 4usize)
+    port.flush()
+    task()
+    var got: [64]u8 = [0; 64]
+    assert_eq(sim.take(0x82, got[..]).expect("nothing was queued for the host"), 4usize)
+    for i in 0..<4 do assert_eq(got[i], "ping".bytes[i])
+
+@test("a read of an empty port takes nothing")
+serial_empty_read()
+    enumerate()
+    open_terminal()
+    var got: [8]u8 = [0; 8]
+    assert_eq(serial.Serial(0).read(got[..]), 0usize)
+
+@test("a write takes only what the transmit buffer holds")
+serial_write_is_bounded()
+    enumerate()
+    open_terminal()
+    val port = serial.Serial(0)
+    val space = port.write_space()
+    assert_eq(space, usize(option_cdc_tx_buffer))
+    var big: [8192]u8 = [u8('x'); 8192]
+    assert_eq(port.write(big[..]), space)
+    // A write that fills the buffer hands one packet to the controller, which makes room for exactly
+    // that packet and no more.
+    assert_eq(port.write_space(), 64usize)
+    assert_eq(port.write(big[..]), 64usize)
+    assert_eq(port.write(big[..]), 0usize)
+
+@test("the receive buffer wraps: many small transfers in and out keep their order")
+serial_receive_wraps()
+    enumerate()
+    open_terminal()
+    val port = serial.Serial(0)
+    var next: u8 = 0
+    var expected: u8 = 0
+    // A full-speed bulk packet is 64 bytes; forty of them are many times the receive buffer.
+    var chunk: [64]u8 = [0; 64]
+    var got: [64]u8 = [0; 64]
+    for round in 0..<40
+        for i in 0..<64
+            chunk[i] = next
+            next += 1
+        assert_eq(sim.give(0x02, chunk[..]).expect("no OUT transfer was queued"), 64usize)
+        task()
+        assert_eq(port.read(got[..]), 64usize)
+        for i in 0..<64
+            assert_eq(got[i], expected)
+            expected += 1
+
+@test("a second port, when the build has one, is a separate stream")
+serial_second_port()
+    enumerate()
+    if PORTS < 2 then return
+    control([0x21, 0x22, 1, 0, 2, 0, 0, 0][..])
+    val second = serial.Serial(1)
+    assert(second.connected())
+    assert(!serial.Serial(0).connected())
+    assert_eq(sim.give(0x04, "two"[..].bytes).expect("no OUT transfer was queued for port 1"), 3usize)
+    task()
+    assert_eq(second.available(), 3usize)
+    assert_eq(serial.Serial(0).available(), 0usize)
+#endif

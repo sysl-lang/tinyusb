@@ -1,0 +1,66 @@
+module sh.sysl.tinyusb
+@tests
+
+import sh.sysl.tinyusb.sim
+
+// What every test file here uses to play a host against the simulated controller of the `sim` port.
+
+struct TestClock
+    ms: u32
+
+impl Clock for TestClock
+    now_ms(*self) -> u32 = self.ms
+
+var clock: TestClock = TestClock(0)
+
+// Bring the device up on the simulated bus and run the stack once.
+boot()
+    sim.reset()
+    set_clock(&clock)
+    assert(start_device(0))
+    sim.bus_reset()
+    task()
+
+// A control request with no data stage: the stack answers with an empty status packet.
+control(packet: []const u8)
+    sim.setup(packet)
+    task()
+    var scratch: [8]u8 = [0; 8]
+    val status = sim.take(0x80, scratch[..])
+    assert(status.is_some(), "the device queued no status stage")
+    task()
+
+// A control read: descriptor `kind`, asking for `length` bytes, into `out`; the length it came to.
+fetch(out: []u8, kind: u8, index: u8, length: u16) -> usize
+    sim.get_descriptor(kind, index, length)
+    task()
+    // Endpoint 0 moves one packet at a time: the host keeps reading until a packet is short.
+    var got = 0usize
+    loop
+        val n = sim.take(0x80, out[got..<out.len]).expect("the device queued no answer on endpoint 0")
+        got += n
+        task()
+        if n < usize(option_device_ep0_size) || got >= usize(length) then break
+    got
+
+// Address the device and select configuration 1, as a host does after reading the descriptors.
+enumerate()
+    boot()
+    control([0x00, 5, 5, 0, 0, 0, 0, 0][..])
+    control([0x00, 9, 1, 0, 0, 0, 0, 0][..])
+
+// How many serial ports this build has, and whether it has a disk.
+#if feature_cdc
+const PORTS: usize = usize(option_cdc_ports)
+#else
+const PORTS: usize = 0
+#endif
+
+#if feature_msc
+const HAS_DISK: bool = true
+#else
+const HAS_DISK: bool = false
+#endif
+
+// The bytes in a bulk packet: 64 at full speed.
+const BULK_PACKET: u16 = 64
