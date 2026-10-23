@@ -1,12 +1,18 @@
 module sh.sysl.tinyusb
 @tests
 
+import sh.sysl.tinyusb.c
 import sh.sysl.tinyusb.descriptors
+import sh.sysl.tinyusb.msc
 import sh.sysl.tinyusb.serial
 import sh.sysl.tinyusb.sim
+import sysl.slices.as_ptr
 
-// The tests play a host against the simulated controller of the `sim` port, so the bytes asserted
-// are what TinyUSB's own device stack answers, not what the binding believes it would.
+// The tests play a host against the simulated controller of the `sim` port, so every byte asserted is
+// what TinyUSB's own device stack answers. The expected values are not read back from the binding:
+// the device descriptor and the strings are written out from the USB specification, the
+// configuration descriptor is TinyUSB's own template macros (`TUD_CDC_DESCRIPTOR` and the others,
+// through `sysl_tusb_reference_configuration`), and a disk's contents are the ones the test put there.
 
 struct TestClock
     ms: u32
@@ -16,6 +22,8 @@ impl Clock for TestClock
 
 private var clock: TestClock = TestClock(0)
 
+// ---- driving the bus ----
+
 // Bring the device up on the simulated bus and run the stack once.
 private boot()
     sim.reset()
@@ -24,20 +32,206 @@ private boot()
     sim.bus_reset()
     task()
 
-// Ask for descriptor `kind` and read the answer back from endpoint 0 into `out`; its length.
+// A control request with no data stage: the stack answers with an empty status packet.
+private control(packet: []const u8)
+    sim.setup(packet)
+    task()
+    var scratch: [8]u8 = [0; 8]
+    val status = sim.take(0x80, scratch[..])
+    assert(status.is_some(), "the device queued no status stage")
+    task()
+
+// A control read: descriptor `kind`, asking for `length` bytes, into `out`; the length it came to.
 private fetch(out: []u8, kind: u8, index: u8, length: u16) -> usize
     sim.get_descriptor(kind, index, length)
     task()
-    val n = sim.take(0x80, out).expect("the device queued no answer on endpoint 0")
-    task()
-    n
+    // Endpoint 0 moves one packet at a time: the host keeps reading until a packet is short.
+    var got = 0usize
+    loop
+        val n = sim.take(0x80, out[got..<out.len]).expect("the device queued no answer on endpoint 0")
+        got += n
+        task()
+        if n < usize(option_device_ep0_size) || got >= usize(length) then break
+    got
 
-@test("the device descriptor the stack answers is the one built from the options")
+// Address the device and select configuration 1, as a host does after reading the descriptors.
+private enumerate()
+    boot()
+    control([0x00, 5, 5, 0, 0, 0, 0, 0][..])
+    control([0x00, 9, 1, 0, 0, 0, 0, 0][..])
+
+// Raise DTR on serial port 0, which is how a terminal says it has opened the port.
+private open_terminal()
+    control([0x21, 0x22, 1, 0, 0, 0, 0, 0][..])
+
+// ---- descriptors ----
+
+@test("the device descriptor the stack answers is the one the specification lays out")
 device_descriptor_answer()
     boot()
     var got: [64]u8 = [0; 64]
     val n = fetch(got[..], 1, 0, 18)
     assert_eq(n, 18usize)
-    for i in 0..<18 do assert_eq(got[i], descriptors.device[i])
-    assert_eq(got[0], 18u8)
-    assert_eq(got[1], 1u8)
+    // USB 2.0 § 9.6.1: length, type, bcdUSB 2.00, an interface-association class (a serial port is
+    // on), endpoint 0 of 64 bytes, vendor 0xCAFE, product 0x4000, device 1.00, the three strings, and
+    // one configuration.
+    val expected: [18]u8 = [18, 1, 0x00, 0x02, 0xEF, 0x02, 0x01, 64, 0xFE, 0xCA, 0x00, 0x40, 0x00, 0x01, 1, 2, 3, 1]
+    for i in 0..<18 do assert_eq(got[i], expected[i])
+
+@test("the configuration descriptor the stack answers is the one TinyUSB's own templates spell")
+configuration_descriptor_answer()
+    boot()
+    var want: [256]u8 = [0; 256]
+    val total = usize(c.reference_configuration(as_ptr(want[..]), 1, true, 64))
+    assert_eq(total, 98usize)
+    var got: [256]u8 = [0; 256]
+    val n = fetch(got[..], 2, 0, 256)
+    assert_eq(n, total)
+    for i in 0..<total do assert_eq(got[i], want[i])
+
+@test("the configuration descriptor's total length field is the length of the bytes")
+configuration_total_length()
+    boot()
+    var got: [256]u8 = [0; 256]
+    // The host first asks for the nine-byte header, and learns the rest of the length from it.
+    val head = fetch(got[..], 2, 0, 9)
+    assert_eq(head, 9usize)
+    assert_eq(usize(got[2]) + 256 * usize(got[3]), 98usize)
+    assert_eq(got[4], 3u8)
+
+@test("a request for a descriptor the device does not have is stalled")
+unknown_descriptor_stalls()
+    boot()
+    sim.get_descriptor(0x77, 0, 8)
+    task()
+    assert(sim.is_stalled(0x80))
+
+@test("string descriptor 0 lists US English, and the others spell the manifest's strings in UTF-16")
+string_descriptors_answer()
+    boot()
+    var got: [64]u8 = [0; 64]
+    assert_eq(fetch(got[..], 3, 0, 255), 4usize)
+    val languages: [4]u8 = [4, 3, 0x09, 0x04]
+    for i in 0..<4 do assert_eq(got[i], languages[i])
+    // "sysl" is the manufacturer: a length byte of 2 + 2 * 4, the string type, and four UTF-16 units.
+    assert_eq(fetch(got[..], 3, 1, 255), 10usize)
+    val manufacturer: [10]u8 = [10, 3, 115, 0, 121, 0, 115, 0, 108, 0]
+    for i in 0..<10 do assert_eq(got[i], manufacturer[i])
+    // "TinyUSB device" is the product: fourteen characters.
+    assert_eq(fetch(got[..], 3, 2, 255), 30usize)
+    assert_eq(got[0], 30u8)
+    assert_eq(got[2], u8('T'))
+    assert_eq(got[28], u8('e'))
+    assert_eq(got[29], 0u8)
+
+@test("a string descriptor no index names is stalled")
+unknown_string_stalls()
+    boot()
+    sim.get_descriptor(3, 9, 255)
+    task()
+    assert(sim.is_stalled(0x80))
+
+// ---- enumeration ----
+
+@test("the device is not mounted until the host selects a configuration")
+mounts_on_configuration()
+    boot()
+    assert(!mounted())
+    control([0x00, 5, 5, 0, 0, 0, 0, 0][..])
+    assert_eq(sim.address(), 5u8)
+    assert(!mounted())
+    control([0x00, 9, 1, 0, 0, 0, 0, 0][..])
+    assert(mounted())
+    assert(ready())
+
+@test("selecting the configuration opens every endpoint the descriptors declare")
+configuration_opens_endpoints()
+    enumerate()
+    // The serial port's notification, out and in endpoints, then the disk's out and in.
+    val declared: [5]u8 = [0x81, 0x02, 0x82, 0x03, 0x83]
+    for ep in declared do assert(sim.is_open(ep), f"endpoint $ep is not open")
+    assert(!sim.is_open(0x84))
+
+@test("the stack reports itself started once the device is")
+reports_started()
+    boot()
+    assert(started())
+
+// ---- the serial port ----
+
+@test("the port is not connected until the terminal raises DTR")
+serial_connects_on_dtr()
+    enumerate()
+    val port = serial.Serial(0)
+    assert(!port.connected())
+    open_terminal()
+    assert(port.connected())
+    assert_eq(port.line_state(), 1u8)
+
+@test("bytes the host sends arrive in the port, in order")
+serial_receives()
+    enumerate()
+    open_terminal()
+    val port = serial.Serial(0)
+    assert_eq(sim.give(0x02, "hello, usb"[..].bytes).expect("no OUT transfer was queued"), 10usize)
+    task()
+    assert_eq(port.available(), 10usize)
+    var got: [32]u8 = [0; 32]
+    assert_eq(port.read(got[..]), 10usize)
+    for i in 0..<10 do assert_eq(got[i], "hello, usb".bytes[i])
+    assert_eq(port.available(), 0usize)
+
+@test("bytes the program writes go to the host once the stack runs")
+serial_transmits()
+    enumerate()
+    open_terminal()
+    val port = serial.Serial(0)
+    assert_eq(port.write_text("ping"), 4usize)
+    port.flush()
+    task()
+    var got: [64]u8 = [0; 64]
+    assert_eq(sim.take(0x82, got[..]).expect("nothing was queued for the host"), 4usize)
+    for i in 0..<4 do assert_eq(got[i], "ping".bytes[i])
+
+@test("a read of an empty port takes nothing")
+serial_empty_read()
+    enumerate()
+    open_terminal()
+    var got: [8]u8 = [0; 8]
+    assert_eq(serial.Serial(0).read(got[..]), 0usize)
+
+@test("a write takes only what the transmit buffer holds")
+serial_write_is_bounded()
+    enumerate()
+    open_terminal()
+    val port = serial.Serial(0)
+    val space = port.write_space()
+    assert_eq(space, usize(option_cdc_tx_buffer))
+    var big: [600]u8 = [u8('x'); 600]
+    assert_eq(port.write(big[..]), space)
+    // A write that fills the buffer hands one packet to the controller, which makes room for exactly
+    // that packet and no more.
+    assert_eq(port.write_space(), 64usize)
+    assert_eq(port.write(big[..]), 64usize)
+    assert_eq(port.write(big[..]), 0usize)
+
+@test("the receive buffer wraps: many small transfers in and out keep their order")
+serial_receive_wraps()
+    enumerate()
+    open_terminal()
+    val port = serial.Serial(0)
+    var next: u8 = 0
+    var expected: u8 = 0
+    // A full-speed bulk packet is 64 bytes; twenty of them are five times the receive buffer.
+    var chunk: [64]u8 = [0; 64]
+    var got: [64]u8 = [0; 64]
+    for round in 0..<20
+        for i in 0..<64
+            chunk[i] = next
+            next += 1
+        assert_eq(sim.give(0x02, chunk[..]).expect("no OUT transfer was queued"), 64usize)
+        task()
+        assert_eq(port.read(got[..]), 64usize)
+        for i in 0..<64
+            assert_eq(got[i], expected)
+            expected += 1

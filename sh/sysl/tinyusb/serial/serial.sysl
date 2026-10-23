@@ -12,10 +12,8 @@ import sysl.slices.as_ptr
 
 #if feature_cdc
 struct Serial
+    // Which of the package's `cdc.ports` this is, counted from 0.
     port: u8
-
-// Serial port `n`, counted from 0. A port the package was not built with reads as never connected.
-serial(n: u8) -> Serial = Serial(n)
 
 impl Serial
     // Whether the host has the port open (it has raised DTR).

@@ -57,7 +57,12 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
 
 void dcd_int_enable(uint8_t rhport) { (void) rhport; sim_interrupts_enabled++; }
 void dcd_int_disable(uint8_t rhport) { (void) rhport; }
-void dcd_set_address(uint8_t rhport, uint8_t dev_addr) { (void) rhport; sim_address = dev_addr; }
+// The controller takes the new address and answers the request's status stage itself, as the
+// interface in device/dcd.h says a port must.
+void dcd_set_address(uint8_t rhport, uint8_t dev_addr) {
+  sim_address = dev_addr;
+  dcd_edpt_xfer(rhport, 0x80, NULL, 0, false);
+}
 void dcd_remote_wakeup(uint8_t rhport) { (void) rhport; }
 void dcd_connect(uint8_t rhport) { (void) rhport; sim_connected = true; }
 void dcd_disconnect(uint8_t rhport) { (void) rhport; sim_connected = false; }
