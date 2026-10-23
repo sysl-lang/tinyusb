@@ -8,6 +8,12 @@
 
 #include "sysl/tinyusb.h"
 
+// A high-speed bulk packet is 512 bytes, and the serial port's stream opens only if its receive buffer
+// holds a whole packet; without this the configuration is refused at run time, on the first transfer.
+#if CFG_TUD_CDC && CFG_TUD_MAX_SPEED == OPT_MODE_HIGH_SPEED && CFG_TUD_CDC_RX_BUFSIZE < 512
+#error "tinyusb: at high speed a serial port's rx_buffer must hold a 512-byte packet; set cdc.rx_buffer to 512 or more"
+#endif
+
 #ifdef SYSL_TUSB_RP2
 // TinyUSB places its hot functions with the SDK's `__not_in_flash`, which every file of the stack
 // then needs to see.

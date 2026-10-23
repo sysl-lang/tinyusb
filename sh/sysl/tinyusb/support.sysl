@@ -62,5 +62,9 @@ const HAS_DISK: bool = true
 const HAS_DISK: bool = false
 #endif
 
-// The bytes in a bulk packet: 64 at full speed.
+// The bytes in a bulk packet: 64 at full speed and 512 at high speed.
+#if feature_high_speed
+const BULK_PACKET: u16 = 512
+#else
 const BULK_PACKET: u16 = 64
+#endif

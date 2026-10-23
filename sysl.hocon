@@ -27,8 +27,16 @@ dependencies {
   cstd { git = "github.com/sysl-lang/cstd", version = "0.1.4", if = "!libc" }
 }
 
+// The suite plays a host against the `sim` port with a serial port and a disk. Every other choice is
+// run by the `variant:` tests, which ask the compiler for the suite again with --features and
+// --option; they build into this directory's `.sysl/out`, so they run one at a time.
+test {
+  features = [sim, cdc, msc]
+  alone    = ["variant:"]
+}
+
 choices {
-  port  { doc = "which USB controller TinyUSB drives", of = [rp2040, rp2350, stm32h7, sim] }
+  port { doc = "which USB controller TinyUSB drives", of = [rp2040, rp2350, stm32h7, sim] }
   speed { doc = "the root port's fastest speed", of = [full_speed, high_speed], default = full_speed }
 }
 

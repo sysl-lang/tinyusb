@@ -1,0 +1,95 @@
+module sh.sysl.tinyusb
+@tests
+
+import sysl.buf.{Buf, buf}
+import sysl.process.capture
+import sysl.testing.compiler
+
+// The suite above runs with the features and options of the manifest's `test` block. Every other
+// choice the package offers is built and run here, by asking the compiler for the suite again with
+// `--features` and `--option`: each child run compiles the package's C for that configuration and
+// plays the same host against it, so a descriptor that follows the options, a class whose callbacks
+// are missing, or a header that does not compile for one combination fails here and not in an
+// application.
+//
+// A child runs one file's tests (`--file`), which is also what keeps these tests from running
+// themselves.
+
+// What a child run printed, and whether the compiler's status was success.
+private struct Run
+    ok: bool
+    text: string
+
+private child(file: string, features: string, options: []const string) -> Run
+    var args: Buf[string] = buf()
+    for a in ["test", ".", "--file", file, "--features", features] do args.push(a)
+    for o in options
+        args.push("--option")
+        args.push(o)
+    val done = capture(compiler(), args.view(), stderr = true).unwrap()
+    Run(done.status.ok(), f"${done.text}${done.err.unwrap_or("")}")
+
+// The number in "N passed" of a child's report, or -1 when the report has none.
+private passed_in(text: string) -> int
+    val at = text.index_of(" passed, ")
+    if at.is_none() then return -1
+    var start = at.unwrap()
+    while start > 0 && text.bytes[start - 1] >= u8('0') && text.bytes[start - 1] <= u8('9') do start -= 1
+    var n = 0
+    for i in start..<at.unwrap() do n = n * 10 + int(text.bytes[i] - u8('0'))
+    n
+
+// Run the three test files for one configuration and return how many tests passed, panicking with
+// the child's own report if any run failed.
+private variant(features: string, options: []const string, device: int, serial: int, disk: int) -> int
+    var total = 0
+    val files: [3]string = ["tests.sysl", "serial_tests.sysl", "disk_tests.sysl"]
+    val wanted: [3]int = [device, serial, disk]
+    for k in 0..<3usize
+        // A file this configuration has no tests in (the class is off), or does not run, is not asked
+        // for: the compiler refuses a --file that matches nothing.
+        if wanted[k] <= 0 then continue
+        val r = child(files[k], features, options)
+        if !r.ok then panic(f"${files[k]} under --features $features failed:\n${r.text}")
+        val n = passed_in(r.text)
+        // A configuration that does not have the class has no tests in its file at all; one that has
+        // it must run every one of them.
+        if n != wanted[k] then panic(f"${files[k]} under --features $features ran $n tests, expected ${wanted[k]}:\n${r.text}")
+        total += n
+    total
+
+@test("variant: two serial ports: the descriptors list both and a second stream is separate")
+variant_two_ports()
+    assert_eq(variant("sim,cdc", ["cdc.ports=2"][..], 9, 7, 0), 16)
+
+@test("variant: a disk without a serial port: the device class is plain and the endpoints start at 1")
+variant_disk_only()
+    assert_eq(variant("sim,msc", [][..], 9, 0, 6), 15)
+
+@test("variant: a serial port and a disk together")
+variant_serial_and_disk()
+    assert_eq(variant("sim,cdc,msc", [][..], 9, 7, 6), 22)
+
+@test("variant: a bigger receive buffer and the MIDI class compile and run")
+variant_midi_and_buffers()
+    assert_eq(variant("sim,cdc,midi", ["cdc.rx_buffer=512", "cdc.tx_buffer=1024"][..], 9, 7, 0), 16)
+
+@test("variant: the HID class compiles and the device runs")
+variant_hid()
+    assert_eq(variant("sim,hid", [][..], 9, 0, 0), 9)
+
+@test("variant: the host role and its classes compile beside the device")
+variant_host_classes()
+    assert_eq(variant("sim,host,host_hub,host_cdc,host_msc,host_hid", [][..], 9, 0, 0), 9)
+
+@test("variant: the high speed choice makes 512-byte bulk endpoints in the descriptors")
+variant_high_speed()
+    // The serial tests move 64-byte packets, which is a full-speed bulk packet, so only the
+    // descriptor and enumeration tests run.
+    assert_eq(variant("sim,cdc,high_speed", ["cdc.rx_buffer=512"][..], 9, -1, -1), 9)
+
+@test("variant: high speed with a receive buffer smaller than a packet is refused with the reason")
+variant_high_speed_small_buffer()
+    val r = child("tests.sysl", "sim,cdc,high_speed", [][..])
+    assert(!r.ok, "the build was accepted")
+    assert(r.text.contains("at high speed a serial port's rx_buffer must hold a 512-byte packet"), r.text)

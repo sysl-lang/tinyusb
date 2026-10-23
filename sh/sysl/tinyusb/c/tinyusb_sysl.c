@@ -53,6 +53,10 @@ uint8_t sysl_tusb_speed_auto(void) { return TUSB_SPEED_AUTO; }
 #if CFG_TUD_ENABLED
 #include <string.h>
 
+/* The descriptor templates spell class codes that tusb.h only declares for the classes a build has. */
+#include "class/cdc/cdc.h"
+#include "class/msc/msc.h"
+
 /* The configuration descriptor TinyUSB's own descriptor templates (`TUD_CONFIG_DESCRIPTOR`,
  * `TUD_CDC_DESCRIPTOR`, `TUD_MSC_DESCRIPTOR`) spell for the serial ports and the disk this build
  * has, written to `out`; its length. The sysl side builds the same descriptor while compiling, and

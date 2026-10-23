@@ -115,7 +115,8 @@ void dcd_edpt_clear_stall(uint8_t rhport, uint8_t ep_addr) {
 
 void sim_dcd_bus_reset(void) {
   sim_address = 0;
-  dcd_event_bus_reset(0, TUSB_SPEED_FULL, false);
+  // The bus runs at the fastest speed the build allows, as a host that can would negotiate.
+  dcd_event_bus_reset(0, CFG_TUD_MAX_SPEED == OPT_MODE_HIGH_SPEED ? TUSB_SPEED_HIGH : TUSB_SPEED_FULL, false);
 }
 
 void sim_dcd_setup(const uint8_t setup[8]) {
