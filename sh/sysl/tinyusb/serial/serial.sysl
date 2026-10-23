@@ -1,0 +1,49 @@
+module sh.sysl.tinyusb.serial
+@no_alloc
+
+import sh.sysl.tinyusb.c
+import sysl.slices.as_ptr
+
+// A CDC-ACM serial port, which the host sees as a virtual COM port.
+//
+// A `Serial` is a number: port `n` of the `cdc.ports` the package was built with. Reads and writes go
+// through TinyUSB's FIFOs (`cdc.rx_buffer` and `cdc.tx_buffer` bytes each), so a write returns at
+// once with what fitted and a read with what had arrived; `tinyusb.task` moves the bytes on the bus.
+
+#if feature_cdc
+struct Serial
+    port: u8
+
+// Serial port `n`, counted from 0. A port the package was not built with reads as never connected.
+serial(n: u8) -> Serial = Serial(n)
+
+impl Serial
+    // Whether the host has the port open (it has raised DTR).
+    connected(self) -> bool = c.cdc_connected(self.port)
+
+    // The line-state bits the host last set: bit 0 is DTR and bit 1 is RTS.
+    line_state(self) -> u8 = c.cdc_line_state(self.port)
+
+    // How many bytes are waiting to be read.
+    available(self) -> usize = usize(c.cdc_available(self.port))
+
+    // Take up to `out.len` bytes that have arrived; the number taken.
+    read(self, out: []u8) -> usize
+        usize(c.cdc_read(self.port, as_ptr(out), u32(out.len)))
+
+    // Throw away what has arrived and not been read.
+    discard(self) = c.cdc_read_flush(self.port)
+
+    // How many bytes a write would take now.
+    write_space(self) -> usize = usize(c.cdc_write_available(self.port))
+
+    // Queue as much of `data` as fits; the number queued. Nothing is sent until the stack runs.
+    write(self, data: []const u8) -> usize
+        usize(c.cdc_write(self.port, as_ptr(data), u32(data.len)))
+
+    // Queue the bytes of a string, as far as they fit.
+    write_text(self, text: string) -> usize = self.write(text.bytes)
+
+    // Hand what is queued to the controller now, rather than at the end of the frame.
+    flush(self) -> usize = usize(c.cdc_write_flush(self.port))
+#endif

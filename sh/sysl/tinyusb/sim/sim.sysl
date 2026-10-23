@@ -1,0 +1,66 @@
+module sh.sysl.tinyusb.sim
+
+import sysl.slices.as_ptr
+
+// The simulated bus of the `sim` port: a host a test plays against the device stack.
+//
+// A test starts the device (`tinyusb.start_device(0)`), then alternates `setup` or `give` with
+// `tinyusb.task()` and reads what the device queued with `take`. Every endpoint is an address as the
+// USB specification writes it: the number, with 0x80 added for IN.
+
+#if feature_sim
+extern "sim_dcd_reset" c_reset()
+extern "sim_dcd_bus_reset" c_bus_reset()
+extern "sim_dcd_setup" c_setup(packet: *u8)
+extern "sim_dcd_in_pending" c_in_pending(ep: u8) -> i32
+extern "sim_dcd_in_take" c_in_take(ep: u8, out: *u8, capacity: u16) -> i32
+extern "sim_dcd_out_give" c_out_give(ep: u8, data: *u8, length: u16) -> i32
+extern "sim_dcd_is_open" c_is_open(ep: u8) -> bool
+extern "sim_dcd_is_stalled" c_is_stalled(ep: u8) -> bool
+extern "sim_dcd_address" c_address() -> u8
+extern "sim_dcd_is_connected" c_is_connected() -> bool
+
+// Forget everything the simulated controller recorded.
+reset() = c_reset()
+
+// Signal a bus reset, as a host does before it enumerates a device.
+bus_reset() = c_bus_reset()
+
+// Deliver a SETUP packet (eight bytes) on endpoint 0.
+setup(packet: []const u8)
+    assert(packet.len == 8)
+    c_setup(as_ptr(packet))
+
+// A standard GET_DESCRIPTOR request for descriptor `kind` and `index`, asking for `length` bytes.
+get_descriptor(kind: u8, index: u8, length: u16)
+    setup([0x80, 6, index, kind, 0, 0, u8(length & 0xFF), u8(length >> 8)][..])
+
+// The length of the transfer the device queued on IN endpoint `ep`, if it did.
+pending(ep: u8) -> Option[usize]
+    val n = c_in_pending(ep)
+    if n < 0 then None else Some(usize(n))
+
+// Collect what the device queued on IN endpoint `ep` into `out`, completing the transfer; the number
+// of bytes copied, or None when nothing was queued.
+take(ep: u8, out: []u8) -> Option[usize]
+    val n = c_in_take(ep, as_ptr(out), u16(out.len))
+    if n < 0 then None else Some(usize(n))
+
+// Hand `data` to the device on OUT endpoint `ep`, as far as the transfer it queued takes it; the
+// number of bytes accepted, or None when the device queued no transfer there.
+give(ep: u8, data: []const u8) -> Option[usize]
+    val n = c_out_give(ep, as_ptr(data), u16(data.len))
+    if n < 0 then None else Some(usize(n))
+
+// Whether the device opened endpoint `ep`.
+is_open(ep: u8) -> bool = c_is_open(ep)
+
+// Whether the device stalled endpoint `ep`.
+is_stalled(ep: u8) -> bool = c_is_stalled(ep)
+
+// The address the host gave the device.
+address() -> u8 = c_address()
+
+// Whether the device attached to the bus.
+is_connected() -> bool = c_is_connected()
+#endif

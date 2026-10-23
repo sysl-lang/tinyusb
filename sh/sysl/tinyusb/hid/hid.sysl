@@ -1,0 +1,40 @@
+module sh.sysl.tinyusb.hid
+@no_alloc
+
+import sysl.slices.as_ptr
+
+// Human-interface devices: keyboards, mice, gamepads and raw reports.
+//
+// **The default descriptors do not declare a HID interface**, because a HID interface is described
+// by its report descriptor, which is the application's. A program using `hid` brings a configuration
+// descriptor that declares the interface (`descriptors.use`), and the report descriptor it names
+// here with `use_report_descriptor`. Reports the host asks for with GET_REPORT are answered empty
+// and reports it sends are dropped, until a program wants more than `send`.
+
+#if feature_hid
+extern "tud_hid_n_ready" c_ready(instance: u8) -> bool
+extern "tud_hid_n_report" c_report(instance: u8, report_id: u8, report: *u8, length: u16) -> bool
+
+private var report_descriptor: *u8 = null
+
+// The report descriptor the host reads for every HID interface.
+use_report_descriptor(bytes: []const u8)
+    report_descriptor = as_ptr(bytes)
+
+// Whether interface `instance` can take a report now.
+ready(instance: u8) -> bool = c_ready(instance)
+
+// Queue `report` on interface `instance`, tagged `report_id` (0 when the descriptor uses none).
+send(instance: u8, report_id: u8, report: []const u8) -> bool
+    c_report(instance, report_id, as_ptr(report), u16(report.len))
+
+@export("tud_hid_descriptor_report_cb")
+private descriptor_report_cb(instance: u8) -> *u8 = report_descriptor
+
+@export("tud_hid_get_report_cb")
+private get_report_cb(instance: u8, report_id: u8, report_type: u8, buffer: *u8, request_length: u16) -> u16 = 0
+
+@export("tud_hid_set_report_cb")
+private set_report_cb(instance: u8, report_id: u8, report_type: u8, buffer: *u8, size: u16)
+    ()
+#endif

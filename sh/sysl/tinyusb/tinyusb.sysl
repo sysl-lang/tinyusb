@@ -1,6 +1,76 @@
 module sh.sysl.tinyusb
+@no_alloc
 
 import sh.sysl.tinyusb.c
 
-// Whether the device stack has been started.
+// The modules that define the callbacks TinyUSB calls are part of every build that has the class, so
+// importing the stack brings them in.
+#if feature_device
+import sh.sysl.tinyusb.descriptors
+#endif
+#if feature_msc
+import sh.sysl.tinyusb.msc
+#endif
+#if feature_hid
+import sh.sysl.tinyusb.hid
+#endif
+
+// TinyUSB, the USB device and host stack, driven with no operating system under it: one loop calls
+// `task`, and the stack calls back into the program.
+//
+// **The shape.** A program gives the stack a clock (`set_clock`), starts a role on a root port
+// (`start_device`, `start_host`), and then calls `task` as often as it can. Everything the host asks
+// of a device is answered from descriptors built from the manifest (`sh.sysl.tinyusb.descriptors`),
+// and a class is used through its own module (`sh.sysl.tinyusb.serial`).
+//
+// **What a program cannot start**: a role whose feature is off. `start_device` exists with the
+// `device` feature, which every device class enables; `start_host` with `host`.
+
+// Where the stack reads the time. A board answers from its tick counter; a test answers from a
+// counter it advances itself.
+trait Clock
+    now_ms(*self) -> u32
+
+private read_clock[C: Clock](state: *u8) -> u32
+    val clock: *C = ptr_cast(state)
+    clock.now_ms()
+
+// Tell the stack what time it is, for as long as the program runs: `clock` stays where it is.
+set_clock[C: Clock](clock: *C)
+    c.set_clock(&read_clock[C], ptr_cast(clock))
+
+// Run whatever the stack has waiting, for each role that is started. A program calls it from its main
+// loop, or from a task when it has an operating system.
+task() = c.task()
+
+// Whether the stack has been started on any root port.
 started() -> bool = c.inited()
+
+#if feature_device
+// Start the stack as a device on root port `rhport`, at the speed the controller negotiates.
+start_device(rhport: u8) -> bool = c.init(rhport, c.role_device(), c.speed_auto())
+
+// Whether the host has configured the device.
+mounted() -> bool = c.device_mounted()
+
+// Whether the device is configured and not suspended: the state in which a transfer can run.
+ready() -> bool = c.device_ready()
+
+// Whether the bus is suspended.
+suspended() -> bool = c.device_suspended()
+
+// Attach to the bus, pulling the line the host watches. `start_device` has done this already unless
+// the program disconnected first.
+connect() -> bool = c.device_connect()
+
+// Detach from the bus, so the host sees the device removed.
+disconnect() -> bool = c.device_disconnect()
+
+// Ask a suspended host to wake. False when the host did not allow it.
+remote_wakeup() -> bool = c.device_remote_wakeup()
+#endif
+
+#if feature_host
+// Start the stack as a host on root port `rhport`.
+start_host(rhport: u8) -> bool = c.init(rhport, c.role_host(), c.speed_auto())
+#endif

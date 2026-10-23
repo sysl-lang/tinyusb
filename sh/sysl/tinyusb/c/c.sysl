@@ -3,9 +3,43 @@
 // **Everything that is C lives here**: the declarations below, read out of TinyUSB's headers, and
 // `tinyusb_sysl.c` beside them for what is a macro or a static inline function upstream. Nothing here
 // is meant to be called by a program; the modules above turn it into the pleasant API.
+//
+// The C beside this file is compiled with TinyUSB's include roots and the configuration the build
+// wrote (`sysl/tinyusb.h`), so a declaration under `#if feature_x` is there exactly when the C is.
 
 module sh.sysl.tinyusb.c
 
 @include("tusb.h")
 
-extern "tud_inited" inited() -> bool
+// ---- starting and running the stack ----
+
+extern "sysl_tusb_init" init(rhport: u8, role: u8, speed: u8) -> bool
+extern "sysl_tusb_inited" inited() -> bool
+extern "sysl_tusb_task" task()
+extern "sysl_tusb_set_clock" set_clock(read: *extern(*u8) -> u32, state: *u8)
+
+extern "sysl_tusb_role_device" role_device() -> u8
+extern "sysl_tusb_role_host" role_host() -> u8
+extern "sysl_tusb_speed_auto" speed_auto() -> u8
+
+#if feature_device
+extern "sysl_tud_ready" device_ready() -> bool
+extern "sysl_tud_mounted" device_mounted() -> bool
+extern "sysl_tud_suspended" device_suspended() -> bool
+extern "sysl_tud_connect" device_connect() -> bool
+extern "sysl_tud_disconnect" device_disconnect() -> bool
+extern "sysl_tud_remote_wakeup" device_remote_wakeup() -> bool
+#endif
+
+// ---- CDC ----
+
+#if feature_cdc
+extern "tud_cdc_n_connected" cdc_connected(itf: u8) -> bool
+extern "tud_cdc_n_get_line_state" cdc_line_state(itf: u8) -> u8
+extern "tud_cdc_n_available" cdc_available(itf: u8) -> u32
+extern "tud_cdc_n_read" cdc_read(itf: u8, buffer: *u8, size: u32) -> u32
+extern "tud_cdc_n_read_flush" cdc_read_flush(itf: u8)
+extern "tud_cdc_n_write" cdc_write(itf: u8, buffer: *u8, size: u32) -> u32
+extern "tud_cdc_n_write_flush" cdc_write_flush(itf: u8) -> u32
+extern "tud_cdc_n_write_available" cdc_write_available(itf: u8) -> u32
+#endif

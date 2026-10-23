@@ -1,0 +1,187 @@
+module sh.sysl.tinyusb.descriptors
+@no_alloc
+
+import sysl.slices.as_ptr
+
+// The descriptors a device answers the host with, built while compiling from the options and
+// features the package was configured with, so the bytes are data in flash.
+//
+// **What the default set describes**: one configuration holding `option_cdc_ports` serial ports
+// (when `cdc` is on), then a mass-storage interface (when `msc` is on). The vendor and product ids
+// are `option_vid` and `option_pid`, the endpoint-0 packet size is `device.ep0_size`, and the strings
+// are `option_manufacturer` and `option_product`. A device with other needs gives its own set to
+// `usb.start`; TinyUSB asks for them through the `tud_descriptor_*_cb` functions this module exports.
+
+#if feature_cdc
+const CDC_PORTS: usize = usize(option_cdc_ports)
+#else
+const CDC_PORTS: usize = 0
+#endif
+
+#if feature_msc
+const MSC_INTERFACES: usize = 1
+#else
+const MSC_INTERFACES: usize = 0
+#endif
+
+#if feature_device
+const EP0_SIZE: u8 = option_device_ep0_size
+#else
+const EP0_SIZE: u8 = 64
+#endif
+
+#if feature_high_speed
+const BULK_SIZE: u16 = 512
+#else
+const BULK_SIZE: u16 = 64
+#endif
+
+// The bytes one serial port's descriptors take: an interface association, the control interface
+// with its four functional descriptors and its notification endpoint, and the data interface with
+// two bulk endpoints.
+const CDC_BYTES: usize = 66
+
+// A mass-storage interface and its two bulk endpoints.
+const MSC_BYTES: usize = 23
+
+const CONFIG_HEADER_BYTES: usize = 9
+
+// How many interfaces the default configuration declares.
+const INTERFACES: usize = 2 * CDC_PORTS + MSC_INTERFACES
+
+// The length of the default configuration descriptor, header included.
+const CONFIG_BYTES: usize = CONFIG_HEADER_BYTES + CDC_BYTES * CDC_PORTS + MSC_BYTES * MSC_INTERFACES
+
+// The language the string descriptors are in: US English.
+const LANGUAGE_ENGLISH_US: u16 = 0x0409
+
+// The indexes the device descriptor gives its strings.
+const STRING_MANUFACTURER: u8 = 1
+const STRING_PRODUCT: u8 = 2
+const STRING_SERIAL: u8 = 3
+
+// The serial number of the default descriptors. A device that has a unique id gives its own set.
+const SERIAL: string = "000000"
+
+// The endpoint number a serial port's notification endpoint, and then its data endpoints, take:
+// port `n` uses numbers `1 + 2n` and `2 + 2n`, and a mass-storage interface the number after the
+// last port's.
+const cdc_notification_endpoint(port: usize) -> u8 = u8(2 * port) + 0x81
+const cdc_out_endpoint(port: usize) -> u8 = u8(2 * port) + 0x02
+const cdc_in_endpoint(port: usize) -> u8 = u8(2 * port) + 0x82
+const msc_out_endpoint() -> u8 = u8(2 * CDC_PORTS) + 1
+const msc_in_endpoint() -> u8 = u8(2 * CDC_PORTS) + 0x81
+
+private const lo(v: u16) -> u8 = u8(v & 0xFF)
+private const hi(v: u16) -> u8 = u8(v >> 8)
+
+// The configuration descriptor being written, a byte at a time.
+struct Writer
+    bytes: [CONFIG_BYTES]u8
+    at: usize
+
+impl Writer
+    const put(*self, b: u8)
+        self.bytes[self.at] = b
+        self.at += 1
+
+    const put_all(*self, bs: []const u8)
+        for b in bs do self.put(b)
+
+    const put_endpoint(*self, address: u8, kind: u8, size: u16, interval: u8)
+        self.put_all([7, 5, address, kind, lo(size), hi(size), interval][..])
+
+private const build_device() -> [18]u8
+    // A serial port needs the interface-association device class; a device without one has none.
+    val misc = CDC_PORTS > 0
+    [18, 1, 0x00, 0x02, if misc then 0xEF else 0, if misc then 0x02 else 0, if misc then 0x01 else 0, EP0_SIZE,
+     lo(option_vid), hi(option_vid), lo(option_pid), hi(option_pid), 0x00, 0x01,
+     STRING_MANUFACTURER, STRING_PRODUCT, STRING_SERIAL, 1]
+
+private const build_configuration() -> [CONFIG_BYTES]u8
+    var w = Writer([0; CONFIG_BYTES], 0)
+    w.put_all([9, 2, lo(u16(CONFIG_BYTES)), hi(u16(CONFIG_BYTES)), u8(INTERFACES), 1, 0, 0x80, 50][..])
+    for port in 0..<CDC_PORTS
+        val itf = u8(2 * port)
+        w.put_all([8, 11, itf, 2, 2, 2, 0, 0][..])
+        w.put_all([9, 4, itf, 0, 1, 2, 2, 0, 0][..])
+        w.put_all([5, 0x24, 0, 0x10, 0x01][..])
+        w.put_all([5, 0x24, 1, 0, itf + 1][..])
+        w.put_all([4, 0x24, 2, 2][..])
+        w.put_all([5, 0x24, 6, itf, itf + 1][..])
+        w.put_endpoint(cdc_notification_endpoint(port), 3, 8, 16)
+        w.put_all([9, 4, itf + 1, 0, 2, 0x0A, 0, 0, 0][..])
+        w.put_endpoint(cdc_out_endpoint(port), 2, BULK_SIZE, 0)
+        w.put_endpoint(cdc_in_endpoint(port), 2, BULK_SIZE, 0)
+    for m in 0..<MSC_INTERFACES
+        w.put_all([9, 4, u8(2 * CDC_PORTS), 0, 2, 8, 6, 0x50, 0][..])
+        w.put_endpoint(msc_out_endpoint(), 2, BULK_SIZE, 0)
+        w.put_endpoint(msc_in_endpoint(), 2, BULK_SIZE, 0)
+    w.bytes
+
+// The default device descriptor: 18 bytes (USB 2.0, § 9.6.1).
+val device: [18]u8 = build_device()
+
+// The default configuration descriptor, with every interface and endpoint after it (§ 9.6.3).
+val configuration: [CONFIG_BYTES]u8 = build_configuration()
+
+// ---- what TinyUSB asks for ----
+
+// A set an application brings in place of the default. Each slice has to outlive the stack: TinyUSB
+// reads it whenever the host asks.
+struct Set
+    device: []const u8
+    configuration: []const u8
+
+private var custom_device: *u8 = null
+private var custom_configuration: *u8 = null
+
+// Use `set` in place of the defaults from now on.
+use(set: Set)
+    custom_device = as_ptr(set.device)
+    custom_configuration = as_ptr(set.configuration)
+
+// Go back to the descriptors built from the manifest.
+use_defaults()
+    custom_device = null
+    custom_configuration = null
+
+@export("tud_descriptor_device_cb")
+private device_cb() -> *u8 = if custom_device == null then as_ptr(device[..]) else custom_device
+
+@export("tud_descriptor_configuration_cb")
+private configuration_cb(index: u8) -> *u8
+    if custom_configuration == null then as_ptr(configuration[..]) else custom_configuration
+
+// A string descriptor is a length-and-type word and then UTF-16: TinyUSB reads it before the next
+// request, so one buffer serves every index.
+private var string_buffer: [64]u16 = [0; 64]
+
+// The text of string `index`, or an empty string for one the default set does not have.
+private text_of(index: u8) -> string
+    if index == STRING_MANUFACTURER then option_manufacturer
+    else if index == STRING_PRODUCT then option_product
+    else if index == STRING_SERIAL then SERIAL
+    else ""
+
+// Builds string descriptor `index` in the shared buffer and returns the number of characters it
+// holds, or -1 when the index is not one the default set has. Index 0 is the list of languages.
+string_descriptor(index: u8) -> int
+    if index == 0
+        string_buffer[0] = (3 << 8) | 4
+        string_buffer[1] = LANGUAGE_ENGLISH_US
+        return 1
+    if index > STRING_SERIAL then return -1
+    val text = text_of(index)
+    // Thirty-one characters is what the buffer holds after the header word; a longer text is cut.
+    val n = if text.len > 31 then 31 else int(text.len)
+    for i in 0..<usize(n) do string_buffer[1 + i] = u16(text.bytes[i])
+    string_buffer[0] = u16((3 << 8) | (2 * n + 2))
+    n
+
+// Word `i` of the string descriptor `string_descriptor` last built.
+string_word(i: usize) -> u16 = string_buffer[i]
+
+@export("tud_descriptor_string_cb")
+private string_cb(index: u8, langid: u16) -> *u16
+    if string_descriptor(index) < 0 then null else as_ptr(string_buffer[..])

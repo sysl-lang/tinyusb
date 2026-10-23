@@ -1,0 +1,119 @@
+module sh.sysl.tinyusb.msc
+@no_alloc
+
+// A mass-storage device: the host sees a disk, and the program answers its reads and writes.
+//
+// **The disk is a trait the program implements**, over a RAM block, a flash region or an SD card, and
+// gives to `attach`. TinyUSB asks for the disk's size, whether it is ready, and then for blocks
+// (`tud_msc_*_cb`, which this module exports); `Disk` is what those become. The default descriptors
+// declare one mass-storage interface when `msc` is on.
+
+#if feature_msc
+// The disk behind the interface.
+trait Disk
+    // How many blocks the disk holds.
+    block_count(*self) -> u32
+
+    // The size of a block in bytes, usually 512.
+    block_size(*self) -> u16
+
+    // Fill `out` with the bytes at `offset` into block `lba`; how many were read, or a negative
+    // number to refuse the read. `out` is at most one block.
+    read(*self, lba: u32, offset: u32, out: []u8) -> int
+
+    // Store `data` at `offset` into block `lba`; how many were taken, or a negative number to refuse.
+    write(*self, lba: u32, offset: u32, data: []const u8) -> int
+
+    // Whether the medium is present and the host may use it.
+    ready(*self) -> bool = true
+
+extern "tud_msc_set_sense" set_sense(lun: u8, key: u8, code: u8, qualifier: u8) -> bool
+
+private var state: *u8 = null
+private var count_of: *extern(*u8) -> u32 = null
+private var size_of: *extern(*u8) -> u16 = null
+private var ready_of: *extern(*u8) -> bool = null
+private var read_of: *extern(*u8, u32, u32, *u8, u32) -> i32 = null
+private var write_of: *extern(*u8, u32, u32, *u8, u32) -> i32 = null
+
+private count_via[D: Disk](s: *u8) -> u32
+    val d: *D = ptr_cast(s)
+    d.block_count()
+
+private size_via[D: Disk](s: *u8) -> u16
+    val d: *D = ptr_cast(s)
+    d.block_size()
+
+private ready_via[D: Disk](s: *u8) -> bool
+    val d: *D = ptr_cast(s)
+    d.ready()
+
+private read_via[D: Disk](s: *u8, lba: u32, offset: u32, buffer: *u8, size: u32) -> i32
+    val d: *D = ptr_cast(s)
+    i32(d.read(lba, offset, buffer[0..<usize(size)]))
+
+private write_via[D: Disk](s: *u8, lba: u32, offset: u32, buffer: *u8, size: u32) -> i32
+    val d: *D = ptr_cast(s)
+    i32(d.write(lba, offset, buffer[0..<usize(size)]))
+
+// Serve `disk` to the host from now on. The disk stays where it is for as long as the program runs.
+attach[D: Disk](disk: *D)
+    state = ptr_cast(disk)
+    count_of = &count_via[D]
+    size_of = &size_via[D]
+    ready_of = &ready_via[D]
+    read_of = &read_via[D]
+    write_of = &write_via[D]
+
+// Serve no disk: the host sees the medium removed.
+detach()
+    state = null
+    count_of = null
+    size_of = null
+    ready_of = null
+    read_of = null
+    write_of = null
+
+// The SCSI sense key for an illegal request.
+private const SENSE_ILLEGAL_REQUEST: u8 = 0x05
+
+@export("tud_msc_inquiry_cb")
+private inquiry_cb(lun: u8, vendor: *u8, product: *u8, revision: *u8)
+    fill(vendor, 8, "sysl")
+    fill(product, 16, option_product)
+    fill(revision, 4, "1.0")
+
+// Writes `text` into a fixed-width, space-padded SCSI field.
+private fill(field: *u8, width: usize, text: string)
+    for i in 0..<width do field[i] = if i < text.len then text.bytes[i] else u8(' ')
+
+@export("tud_msc_test_unit_ready_cb")
+private test_unit_ready_cb(lun: u8) -> bool
+    if ready_of == null then false else ready_of(state)
+
+@export("tud_msc_capacity_cb")
+private capacity_cb(lun: u8, block_count: *u32, block_size: *u16)
+    if count_of == null
+        *block_count = 0
+        *block_size = 512
+    else
+        *block_count = count_of(state)
+        *block_size = size_of(state)
+
+@export("tud_msc_start_stop_cb")
+private start_stop_cb(lun: u8, power_condition: u8, start: bool, load_eject: bool) -> bool = true
+
+@export("tud_msc_read10_cb")
+private read10_cb(lun: u8, lba: u32, offset: u32, buffer: *u8, size: u32) -> i32
+    if read_of == null then -1 else read_of(state, lba, offset, buffer, size)
+
+@export("tud_msc_write10_cb")
+private write10_cb(lun: u8, lba: u32, offset: u32, buffer: *u8, size: u32) -> i32
+    if write_of == null then -1 else write_of(state, lba, offset, buffer, size)
+
+// Read10 and Write10 have their own callbacks; any other command is one this module does not know.
+@export("tud_msc_scsi_cb")
+private scsi_cb(lun: u8, command: *u8, buffer: *u8, size: u16) -> i32
+    set_sense(lun, SENSE_ILLEGAL_REQUEST, 0x20, 0x00)
+    -1
+#endif
