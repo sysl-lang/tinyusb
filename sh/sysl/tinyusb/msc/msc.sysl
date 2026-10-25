@@ -1,6 +1,8 @@
 module sh.sysl.tinyusb.msc
 @no_alloc
 
+import sysl.raw.ptr_cast
+
 // A mass-storage device: the host sees a disk, and the program answers its reads and writes.
 //
 // **The disk is a trait the program implements**, over a RAM block, a flash region or an SD card, and

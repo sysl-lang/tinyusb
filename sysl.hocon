@@ -20,11 +20,11 @@
 package {
   name    = "tinyusb"
   version = "0.1.0"
-  sysl    = "0.5.0"
+  sysl    = "0.6.0"
 }
 
 dependencies {
-  cstd { git = "github.com/sysl-lang/cstd", version = "0.1.4", if = "!libc" }
+  cstd { git = "github.com/sysl-lang/cstd", version = "0.1.7", if = "!libc" }
 }
 
 // The suite plays a host against the `sim` port with a serial port and a disk. Every other choice is

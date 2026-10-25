@@ -2,6 +2,7 @@ module sh.sysl.tinyusb
 @no_alloc
 
 import sh.sysl.tinyusb.c
+import sysl.raw.ptr_cast
 
 // The modules that define the callbacks TinyUSB calls are part of every build that has the class, so
 // importing the stack brings them in.
