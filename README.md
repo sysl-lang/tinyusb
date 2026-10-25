@@ -2,7 +2,7 @@
 
 A sysl package for the TinyUSB USB device and host stack, with the controller ports for the
 RP2040/RP2350 and the STM32H7 (Synopsys DWC2), and a simulated port for host-side tests. It is the
-worked example of sysl 0.5.0's manifest: one vendored tree, left byte for byte as upstream released it,
+worked example of the `sysl.hocon` manifest (sysl 0.6.0): one vendored tree, left byte for byte as upstream released it,
 serves three chips, a device or a host or both, and the classes a program picks.
 
 *An independent sysl package for TinyUSB. It is not affiliated with or endorsed by TinyUSB's authors
