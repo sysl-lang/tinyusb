@@ -79,13 +79,13 @@ serial_receive_wraps()
     for round in 0..<40
         for i in 0..<64
             chunk[i] = next
-            next += 1
+            next +%= 1
         assert_eq(sim.give(0x02, chunk[..]).expect("no OUT transfer was queued"), 64usize)
         task()
         assert_eq(port.read(got[..]), 64usize)
         for i in 0..<64
             assert_eq(got[i], expected)
-            expected += 1
+            expected +%= 1
 
 @test("a second port, when the build has one, is a separate stream")
 serial_second_port()
