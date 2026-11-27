@@ -24,7 +24,7 @@ package {
 }
 
 dependencies {
-  cstd { git = "github.com/sysl-lang/cstd", version = "0.1.8", if = "!libc" }
+  cstd { git = "github.com/sysl-lang/cstd", version = "0.1.10", if = "!libc" }
 }
 
 // The suite plays a host against the `sim` port with a serial port and a disk. Every other choice is
